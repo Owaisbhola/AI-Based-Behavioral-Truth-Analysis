@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Behavioral Analysis - Pro</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="main-container">
+        <header>
+            <div class="logo">Lie Detector</div>
+            <div id="statusBadge" class="status-badge" style="display: none;">
+                <span class="dot"></span> LIVE SYSTEM
+            </div>
+            <div class="user-menu">
+                <span style="color:#b6eada;font-size:0.95em;">Welcome, <b>{{ g.get('username', 'User') }}</b></span>
+               
+            </div>
+        </header>
+
+        <main class="content-area">
+            <div class="video-section">
+                <div class="video-wrapper">
+                    <div id="scanLine" class="scan-line" style="display: none;"></div>
+                    <div id="placeholder" class="placeholder-box">
+                        <div id="loader" class="loader" style="display: none;"></div>
+                        <span id="placeholderText">Step 1: <b>Calibrate Voice</b> to Begin <span title="Click the blue button below and speak normally for a few seconds.">🛈</span></span>
+                    </div>
+                    <!-- DEPLOYMENT READY: Use Video tag instead of Img tag -->
+                    <video id="webcam" autoplay playsinline style="width: 100%; height: auto; display: none; border-radius: 8px; transform: scaleX(-1);"></video>
+                    <canvas id="output_canvas" style="display: none;"></canvas>
+                </div>
+
+                <div class="controls card">
+                    <div class="btn-group">
+                        <!-- Step 1: Calibration -->
+                        <button id="calibrateBtn" class="btn-start" onclick="startCalibration()" style="background-color: #2196F3;">1. Calibrate (Speak Normally)</button>
+                        
+                        <!-- Step 2: 1-Minute Session -->
+                        <button id="startBtn" class="btn-start" onclick="startOneMinuteSession()" style="display: none; background-color: #4CAF50;">2. Start 1-Min Interrogation</button>
+                        
+                        <button id="stopBtn" class="btn-stop" onclick="stopCamera(false)" style="display: none;">Cancel Session</button>
+                        <button id="resetBtn" class="btn-start" onclick="location.reload()" style="display: none; background-color: #f44336;">Fresh Restart</button>
+                    </div>
+
+                    <div class="telemetry-grid">
+                        <div class="data-card">
+                            <span class="data-label">Blinks</span>
+                            <span id="count" class="data-value">0</span>
+                        </div>
+                        <div class="data-card">
+                            <span class="data-label">Current Status</span>
+                            <span id="voiceResult" class="data-value">Waiting...</span>
+                        </div>
+                        <div class="data-card">
+                            <span class="data-label">Timer</span>
+                            <span id="statusText" class="data-value" style="color: #ffeb3b;">READY</span>
+                        </div>
+                    </div>
+                    
+                    <div id="finalResults" class="final-results" style="display: none; background: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #4CAF50; margin-top: 20px;">
+                        <h3 style="color: #4CAF50; margin-top: 0;">Full Session Overview</h3>
+                        <div class="result-item">
+                            <span class="result-label">Overall Verdict:</span>
+                            <span id="finalVoiceResult" class="result-value" style="font-weight: bold; font-size: 1.2rem;"></span>
+                        </div>
+                        <div class="result-item">
+                            <span class="result-label">Average Stress:</span>
+                            <span id="voiceScore" class="result-value"></span>
+                        </div>
+                        <div class="result-item">
+                            <span class="result-label">Total Blink Rate:</span>
+                            <span id="finalBlinkCount" class="result-value"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        <footer style="margin-top:40px; color:var(--primary-neon); font-size:0.85em; text-align:center; opacity:0.7; letter-spacing: 2px;">
+            &copy; 2026 Lie Detector | <a href="/" style="color:var(--primary-neon);text-decoration:underline;">Home</a> | <a href="/logout" style="color:#ff4444;text-decoration:underline;">Logout</a>
+        </footer>
+    </div>
+
+  <script>
+const BASE_URL = "http://127.0.0.1:5000"; // change after deployment
+
+const video = document.getElementById('webcam');
+const canvas = document.getElementById('output_canvas');
+const ctx = canvas.getContext('2d');
+
+let isAnalysisActive = false;
+let frameInterval = null;
+let blinkInterval = null;
+let mediaRecorder;
+let audioChunks = [];
+let userStream = null;
+let isCalibrating = false;
+
+// ---------------- CALIBRATION ----------------
+async function startCalibration() {
+    if (isCalibrating) return;
+    isCalibrating = true;
+
+    const statusText = document.getElementById('statusText');
+    const calibrateBtn = document.getElementById('calibrateBtn');
+
+    statusText.innerText = "CALIBRATING VOICE (10s)...";
+    calibrateBtn.disabled = true;
+
+    try {
+        userStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+
+        mediaRecorder = new MediaRecorder(userStream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            const formData = new FormData();
+            formData.append('audio_data', audioBlob);
+
+            statusText.innerText = "PROCESSING BASELINE...";
+
+            try {
+                const res = await fetch(`${BASE_URL}/calibrate_voice`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await res.json();
+
+                if (data.status === 'Voice Calibrated') {
+                    statusText.innerText = "READY";
+                    calibrateBtn.style.display = "none";
+                    document.getElementById('startBtn').style.display = "inline-block";
+                }
+            } catch (err) {
+                statusText.innerText = "RETRY CALIBRATION";
+                calibrateBtn.disabled = false;
+            }
+
+            isCalibrating = false;
+        };
+
+        mediaRecorder.start();
+
+        setTimeout(() => {
+            if (mediaRecorder.state === "recording") mediaRecorder.stop();
+        }, 10000);
+
+    } catch (err) {
+        alert("Mic/Camera access required!");
+        isCalibrating = false;
+    }
+}
+
+// ---------------- START SESSION ----------------
+async function startOneMinuteSession() {
+    try {
+        await fetch(`${BASE_URL}/start_session`);
+
+        video.srcObject = userStream;
+        await video.play(); // ✅ CRITICAL FIX
+
+        video.style.display = "block";
+        document.getElementById('placeholder').style.display = "none";
+        document.getElementById('scanLine').style.display = "block";
+        document.getElementById('statusBadge').style.display = "flex";
+        document.getElementById('startBtn').style.display = "none";
+        document.getElementById('stopBtn').style.display = "inline-block";
+
+        isAnalysisActive = true;
+        audioChunks = [];
+
+        mediaRecorder = new MediaRecorder(userStream, {
+            mimeType: 'video/webm;codecs=vp8,opus'
+        });
+
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+            const audioBlob = new Blob(audioChunks, { type: 'video/webm' });
+            const formData = new FormData();
+            formData.append('audio_data', audioBlob);
+
+            document.getElementById('statusText').innerText = "FINALIZING ANALYSIS...";
+
+            const response = await fetch(`${BASE_URL}/process_full_audio`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                showFinalReport();
+            } else {
+                document.getElementById('statusText').innerText = "ANALYSIS ERROR";
+            }
+        };
+
+        mediaRecorder.start();
+
+        // ✅ delay so video loads
+        setTimeout(() => {
+            frameInterval = setInterval(sendFrameToServer, 200);
+        }, 500);
+
+        blinkInterval = setInterval(updateBlinkCount, 1000);
+
+        // TIMER
+        let timeLeft = 60;
+        const timer = setInterval(() => {
+            timeLeft--;
+            document.getElementById('statusText').innerText = `SESSION: ${timeLeft}s`;
+
+            if (timeLeft <= 0 || !isAnalysisActive) {
+                clearInterval(timer);
+
+                if (isAnalysisActive) {
+                    mediaRecorder.stop();
+                    stopCamera(false);
+                }
+            }
+        }, 1000);
+
+    } catch (err) {
+        console.error("Session Start Error:", err);
+        alert("Could not start session.");
+    }
+}
+
+// ---------------- SEND FRAME ----------------
+function sendFrameToServer() {
+    if (!isAnalysisActive) return;
+
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+        console.log("Video not ready");
+        return;
+    }
+
+    console.log("Sending frame...");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.drawImage(video, 0, 0);
+
+    const payload = JSON.stringify({
+        image: canvas.toDataURL('image/jpeg', 0.5)
+    });
+
+    fetch(`${BASE_URL}/process_frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
+    }).catch(err => console.error(err));
+}
+
+// ---------------- BLINK COUNT ----------------
+function updateBlinkCount() {
+    if (!isAnalysisActive) return;
+
+    fetch(`${BASE_URL}/blink_count`)
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById('count').textContent = data.count;
+        });
+}
+
+// ---------------- FINAL REPORT ----------------
+function showFinalReport() {
+    fetch(`${BASE_URL}/get_session_report`)
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById('finalResults').style.display = "block";
+
+            const v = document.getElementById('finalVoiceResult');
+            v.innerText = `${data.verdict} (${data.lie_probability})`;
+            v.style.color = data.verdict.includes("TRUTHFUL") ? "#4CAF50" : "#f44336";
+
+            document.getElementById('voiceScore').innerText =
+                `Voice Stress: ${data.voice_stress} | Face Tension: ${data.face_tension}`;
+
+            document.getElementById('finalBlinkCount').innerText = data.blink_rate;
+        });
+}
+
+// ---------------- STOP ----------------
+function stopCamera(immediateReport) {
+    isAnalysisActive = false;
+
+    clearInterval(frameInterval);
+    clearInterval(blinkInterval);
+
+    if (userStream) {
+        userStream.getTracks().forEach(t => t.stop());
+    }
+
+    video.style.display = "none";
+
+    document.getElementById('placeholder').style.display = "block";
+    document.getElementById('statusBadge').style.display = "none";
+    document.getElementById('stopBtn').style.display = "none";
+    document.getElementById('resetBtn').style.display = "inline-block";
+
+    if (immediateReport) showFinalReport();
+}
+</script>
+</body>
+</html>
